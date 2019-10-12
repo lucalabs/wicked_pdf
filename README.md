@@ -1,10 +1,10 @@
-# Wicked PDF [![Build Status](https://secure.travis-ci.org/mileszs/wicked_pdf.svg)](http://travis-ci.org/mileszs/wicked_pdf) [![Gem Version](https://badge.fury.io/rb/wicked_pdf.svg)](http://badge.fury.io/rb/wicked_pdf) [![Code Climate](https://codeclimate.com/github/mileszs/wicked_pdf/badges/gpa.svg)](https://codeclimate.com/github/mileszs/wicked_pdf)
+# Wicked PDF [![Gem Version](https://badge.fury.io/rb/wicked_pdf.svg)](http://badge.fury.io/rb/wicked_pdf) [![Build Status](https://secure.travis-ci.org/mileszs/wicked_pdf.svg)](http://travis-ci.org/mileszs/wicked_pdf) [![Code Climate](https://codeclimate.com/github/mileszs/wicked_pdf/badges/gpa.svg)](https://codeclimate.com/github/mileszs/wicked_pdf) [![Open Source Helpers](https://www.codetriage.com/mileszs/wicked_pdf/badges/users.svg)](https://www.codetriage.com/mileszs/wicked_pdf)
 
 ## A PDF generation plugin for Ruby on Rails
 
 Wicked PDF uses the shell utility [wkhtmltopdf](http://wkhtmltopdf.org) to serve a PDF file to a user from HTML.  In other words, rather than dealing with a PDF generation DSL of some sort, you simply write an HTML view as you would normally, then let Wicked PDF take care of the hard stuff.
 
-_Wicked PDF has been verified to work on Ruby versions 1.8.7 through 2.3; Rails 2 through 5.0_
+_Wicked PDF has been verified to work on Ruby versions 2.2 through 2.6; Rails 4 through 5.2_
 
 ### Installation
 
@@ -85,7 +85,6 @@ The wkhtmltopdf binary is run outside of your Rails application; therefore, your
   </body>
 </html>
 ```
-
 Using wicked_pdf_helpers with asset pipeline raises `Asset names passed to helpers should not include the "/assets/" prefix.` error. To work around this, you can use `wicked_pdf_asset_base64` with the normal Rails helpers, but be aware that this will base64 encode your content and inline it in the page. This is very quick for small assets, but large ones can take a long time.
 
 ```html
@@ -108,6 +107,13 @@ Using wicked_pdf_helpers with asset pipeline raises `Asset names passed to helpe
 </html>
 ```
 
+#### Webpacker usage
+
+wicked_pdf supports webpack stylesheets and javascript assets.
+
+Use `wicked_pdf_stylesheet_pack_tag` for stylesheets
+Use `wicked_pdf_javascript_pack_tag` for javascripts
+
 #### Asset pipeline usage
 
 It is best to precompile assets used in PDF views. This will help avoid issues when it comes to deploying, as Rails serves asset files differently between development and production (`config.assets.compile = false`), which can make it look like your PDFs work in development, but fail to load assets in production.
@@ -126,6 +132,9 @@ In this case, you can use that standard Rails helpers and point to the current C
 ```
 
 ### Advanced Usage with all available options
+
+_NOTE: Certain options are only supported in specific versions of wkhtmltopdf._
+
 ```ruby
 class ThingsController < ApplicationController
   def show
@@ -135,7 +144,8 @@ class ThingsController < ApplicationController
         render pdf:                            'file_name',
                disposition:                    'attachment',                 # default 'inline'
                template:                       'things/show',
-               file:                           "#{Rails.root}/files/foo.erb"
+               file:                           "#{Rails.root}/files/foo.erb",
+               inline:                         '<!doctype html><html><head></head><body>INLINE HTML</body></html>',
                layout:                         'pdf',                        # for a pdf.pdf.erb file
                wkhtmltopdf:                    '/usr/local/bin/wkhtmltopdf', # path to binary
                show_as_html:                   params.key?('debug'),         # allow debugging based on url param
@@ -175,11 +185,13 @@ class ThingsController < ApplicationController
                print_media_type:               true,
                disable_smart_shrinking:        true,
                use_xserver:                    true,
-               background:                     false,                     # backround needs to be true to enable background colors to render
+               background:                     false,                     # background needs to be true to enable background colors to render
                no_background:                  true,
                viewport_size:                  'TEXT',                    # available only with use_xserver or patched QT
                extra:                          '',                        # directly inserted into the command to wkhtmltopdf
-               raise_on_all_errors:            nil,                       # raise error for any stderr output.  Such as missing media, image assets 
+               raise_on_all_errors:            nil,                       # raise error for any stderr output.  Such as missing media, image assets
+               log_level:                      'info',                    # Available values: none, error, warn, or info - only available with wkhtmltopdf 0.12.5+
+               quiet:                          false,                     # `false` is same as `log_level: 'info'`, `true` is same as `log_level: 'none'`
                outline: {   outline:           true,
                             outline_depth:     LEVEL },
                margin:  {   top:               SIZE,                     # default 10 (mm)
@@ -235,7 +247,8 @@ class ThingsController < ApplicationController
                             disable_links:     true,
                             disable_toc_links: true,
                             disable_back_links:true,
-                            xsl_style_sheet:   'file.xsl'} # optional XSLT stylesheet to use for styling table of contents
+                            xsl_style_sheet:   'file.xsl'}, # optional XSLT stylesheet to use for styling table of contents
+               progress: proc { |output| puts output } # proc called when console output changes
       end
     end
   end
@@ -297,12 +310,33 @@ save_path = Rails.root.join('pdfs','filename.pdf')
 File.open(save_path, 'wb') do |file|
   file << pdf
 end
+
+# you can also track progress on your PDF generation, such as when using it from within a Resque job
+class PdfJob
+  def perform
+    blk = proc { |output|
+      match = output.match(/\[.+\] Page (?<current_page>\d+) of (?<total_pages>\d+)/)
+      if match
+        current_page = match[:current_page].to_i
+        total_pages = match[:total_pages].to_i
+        message = "Generated #{current_page} of #{total_pages} pages"
+        at current_page, total_pages, message
+      end
+    }
+    WickedPdf.new.pdf_from_string(html, progress: blk)
+  end
+end
 ```
 If you need to display utf encoded characters, add this to your pdf views or layouts:
 ```html
 <meta charset="utf-8" />
 ```
-
+If you need to return a PDF in a controller with Rails in API mode:
+```ruby
+pdf_html = ActionController::Base.new.render_to_string(template: 'controller_name/action_name', layout: 'pdf')
+pdf = WickedPdf.new.pdf_from_string(pdf_html)
+send_data pdf, filename: 'file.pdf'
+```
 ### Page Breaks
 
 You can control page breaks with CSS.
@@ -356,7 +390,7 @@ If you would like to have WickedPdf automatically generate PDF views for all (or
 require 'wicked_pdf'
 config.middleware.use WickedPdf::Middleware
 ```
-If you want to turn on or off the middleware for certain urls, use the `:only` or `:except` conditions like so:
+If you want to turn on or off the middleware for certain URLs, use the `:only` or `:except` conditions like so:
 ```ruby
 # conditions can be plain strings or regular expressions, and you can supply only one or an array
 config.middleware.use WickedPdf::Middleware, {}, only: '/invoice'
@@ -375,7 +409,7 @@ attachments['attachment.pdf'] = WickedPdf.new.pdf_from_string(
 )
 ```
 
-This will render the pdf to a string an include it in the email. This is very slow so make sure you schedule your email delivery in a job.
+This will render the pdf to a string and include it in the email. This is very slow so make sure you schedule your email delivery in a job.
 
 ### Further Reading
 
@@ -404,7 +438,7 @@ However, the wicked_pdf_* helpers will use file:/// paths for assets when using 
 
 #### Gotchas
 
-If one image from your HTML cannot be found (relative or wrong path for ie), others images with right paths **may not** be displayed in the output PDF as well (it seems to be an issue with wkhtmltopdf).
+If one image from your HTML cannot be found (relative or wrong path for example), others images with right paths **may not** be displayed in the output PDF as well (it seems to be an issue with wkhtmltopdf).
 
 wkhtmltopdf may render at different resolutions on different platforms. For example, Linux prints at 75 dpi (native for WebKit) while on Windows it's at the desktop's DPI (which is normally 96 dpi). [Use `:zoom => 0.78125`](https://github.com/wkhtmltopdf/wkhtmltopdf/issues/2184) (75/96) to match Linux rendering to Windows.
 
