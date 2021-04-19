@@ -10,6 +10,10 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ### Fixes
 - None
 
+## [1.4.1] - 2021-04-19
+### Fixes
+- [Fix issue loading stylesheets from uri](https://github.com/lucalabs/wicked_pdf/pull/1)
+
 ## [1.4.0] - 2019-05-23
 ### New Features
 - [Add support for `log_level` and `quiet` options](https://github.com/mileszs/wicked_pdf/pull/834)
